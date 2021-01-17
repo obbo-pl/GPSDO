@@ -23,14 +23,19 @@ uint8_t hex2int(const char hex);
 void command_SystemVersion(TERMINAL_t *terminal);
 void command_EndTerminalSession(TERMINAL_t *terminal);
 void command_ShowGPSDOStatus(TERMINAL_t *terminal);
+void command_ShowStatusCSVFormat(TERMINAL_t *terminal);
+void command_DisableFrequencyCorrection(TERMINAL_t *terminal);
 
-#define TERMINAL_BASE_COMMANDS_COUNT		3
+
+#define TERMINAL_BASE_COMMANDS_COUNT		5
 #define TERMINAL_COMMANDS_COUNT			(TERMINAL_BASE_COMMANDS_COUNT)
 
 TERMINAL_COMMAND_t terminal_commands[TERMINAL_COMMANDS_COUNT] = {
 	{ .pattern = "@VER", .callback = command_SystemVersion,},
 	{ .pattern = "@ETS", .callback = command_EndTerminalSession,},
 	{ .pattern = "@SGS", .callback = command_ShowGPSDOStatus,},
+	{ .pattern = "@SSC", .callback = command_ShowStatusCSVFormat,},
+	{ .pattern = "@DFC", .callback = command_DisableFrequencyCorrection,},		
 };
 
 GPSDO_State_t *state_gpsdo;
@@ -83,3 +88,26 @@ void command_ShowGPSDOStatus(TERMINAL_t *terminal)
 	state_gpsdo->show_gpsdo_status = true;
 }
 
+void command_ShowStatusCSVFormat(TERMINAL_t *terminal)
+{
+	if (terminal->command_option[0] == TERMINAL_SPACE) {
+		int temp = atoi(terminal->command_option);
+		if (temp < 1) {
+			state_gpsdo->gpsdo_status_format_csv = false;
+		} else {
+			state_gpsdo->gpsdo_status_format_csv = true;
+		}
+	}
+}
+
+void command_DisableFrequencyCorrection(TERMINAL_t *terminal)
+{
+	if (terminal->command_option[0] == TERMINAL_SPACE) {
+		int temp = atoi(terminal->command_option);
+		if (temp < 1) {
+			state_gpsdo->disable_frequency_correction = false;
+		} else {
+			state_gpsdo->disable_frequency_correction = true;
+		}
+	}
+}

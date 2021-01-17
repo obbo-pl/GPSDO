@@ -35,6 +35,8 @@ typedef struct GPSDO {
 	volatile bool forward_gps_message;
 	volatile bool show_gps_message;
 	volatile bool show_gpsdo_status;
+	volatile bool gpsdo_status_format_csv;
+	volatile bool disable_frequency_correction;
 	uint8_t errors;
 } GPSDO_State_t;
 

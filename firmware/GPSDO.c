@@ -84,7 +84,6 @@ const char DEVICE_INFO[DEVICE_INFO_SIZE]	PROGMEM = "GPSDO "VERSION_MAJOR "." VER
 #define SEQUENTIAL_TO_FIX_CALIBRATION		(uint8_t)(16)
 #define TARGET_PRECISION_ppm			0.1
 
-//#define SHOW_STATE_FORMAT_CSV
 
 enum {
 	MAIN_ERROR_MAIN_CLOCK,
@@ -105,6 +104,8 @@ GPSDO_State_t gpsdo_state = {
 	.forward_gps_message = true,
 	.show_gps_message = false,
 	.show_gpsdo_status = false,
+	.gpsdo_status_format_csv = false,
+	.disable_frequency_correction = false,
 	.errors = 0,
 	};
 
@@ -292,6 +293,7 @@ int main(void)
 				gpsdo_state.error_frequency = gpsdo_state.frequency - CONFIG_VCXO_NOMINAL_FREQUENCY;
 				uint16_t dac_value_new = ((1 << DAC_FILTER_SCALE) * (gpsdo_state.dac_value - DAC_CORRECTION_FACTOR * gpsdo_state.error_frequency));
 				gpsdo_state.dac_value = (lpfilter_Filter(&filter_dac_value, dac_value_new) >> DAC_FILTER_SCALE);
+				if (gpsdo_state.disable_frequency_correction) gpsdo_state.dac_value = DAC_VALUE_BASE;
 				mcp47x6_SetOutputLevel(&dac, gpsdo_state.dac_value);
 				gpsdo_state.error_ppm = gpsdo_state.error_frequency;
 				if (gpsdo_state.error_ppm < 0) gpsdo_state.error_ppm = -gpsdo_state.error_ppm;
@@ -554,15 +556,15 @@ void main_ClearSyncState(void)
 void main_ShowTemperature(void)
 {
 	// shows temperature in degrees Celsius
-#ifndef SHOW_STATE_FORMAT_CSV
-	terminal_Print(&terminal, "Temperature=", false);
-#endif
+	if (!gpsdo_state.gpsdo_status_format_csv) {
+		terminal_Print(&terminal, "Temperature=", false);
+	}
 	char buffer[8];
 	ftoa((float)(gpsdo_state.temperature_k - 27315) / 100, buffer, 8);
 	terminal_Print(&terminal, buffer, false);
-#ifndef SHOW_STATE_FORMAT_CSV
-	terminal_Print(&terminal, "\xF8""C" , false);
-#endif
+	if (!gpsdo_state.gpsdo_status_format_csv) {
+		terminal_Print(&terminal, "\xF8""C" , false);
+	}
 }
 
 void main_ShowErrorPpm(void)
@@ -570,68 +572,68 @@ void main_ShowErrorPpm(void)
 	if (gpsdo_state.error_ppm < 0.1) {
 		terminal_Print(&terminal, "<0.1", false);
 	} else {
-#ifndef SHOW_STATE_FORMAT_CSV
-		terminal_Print(&terminal, " ", false);
-#endif
+		if (!gpsdo_state.gpsdo_status_format_csv) {
+			terminal_Print(&terminal, " ", false);
+		}
 		char ppm_buffer[8];
 		ftoa(gpsdo_state.error_ppm, ppm_buffer, 8);
 		terminal_Print(&terminal, ppm_buffer, false);
 	}
-#ifndef SHOW_STATE_FORMAT_CSV
-	terminal_Print(&terminal, "ppm", false);
-#endif
+	if (!gpsdo_state.gpsdo_status_format_csv) {
+		terminal_Print(&terminal, "ppm", false);
+	}
 }
 
 void main_ShowStatus(void)
 {
 	delays_Reset(&timeout_show_temperature_ms);
-#ifdef SHOW_STATE_FORMAT_CSV
-	terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
-	terminal_Print(&terminal, ";", false);
-	terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
-	terminal_Print(&terminal, ";", false);
-	terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
-	terminal_Print(&terminal, ";", false);
-	terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
-	terminal_Print(&terminal, ";", false);
-	terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
-	terminal_Print(&terminal, ";" , false);
-	terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
-	terminal_Print(&terminal, ";", false);
-	terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
-	terminal_Print(&terminal, ";", false);
-	main_ShowErrorPpm();
-	terminal_Print(&terminal, ";", false);
-	main_ShowTemperature();
-	terminal_Print(&terminal, ";", false);
-	terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
-	terminal_SendNL(&terminal, false);	
-#else
-	terminal_Print(&terminal, "CHK=", false);
-	terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
-	terminal_Print(&terminal, ", SYN=", false);
-	terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
-	terminal_Print(&terminal, ", LST=", false);
-	terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
-	terminal_Print(&terminal, ", LOF=", false);
-	terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
-	terminal_Print(&terminal, ", HIF=", false);
-	terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
-	terminal_SendNL(&terminal, false);
-	terminal_Print(&terminal, "  f=", false);
-	terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
-	terminal_Print(&terminal, "Hz, error: ", false);
-	if (gpsdo_state.error_frequency >= 0) terminal_Print(&terminal, " ", false);
-	terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
-	terminal_Print(&terminal, "Hz, ", false);
-	main_ShowErrorPpm();
-	terminal_SendNL(&terminal, false);
-	terminal_Print(&terminal, "  " , false);
-	main_ShowTemperature();
-	terminal_Print(&terminal, ", DAC correction: ", false);
-	terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
-	terminal_SendNL(&terminal, false);
-#endif
+	if (gpsdo_state.gpsdo_status_format_csv) {
+		terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
+		terminal_Print(&terminal, ";", false);
+		terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
+		terminal_Print(&terminal, ";", false);
+		terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
+		terminal_Print(&terminal, ";", false);
+		terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
+		terminal_Print(&terminal, ";", false);
+		terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
+		terminal_Print(&terminal, ";" , false);
+		terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
+		terminal_Print(&terminal, ";", false);
+		terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
+		terminal_Print(&terminal, ";", false);
+		main_ShowErrorPpm();
+		terminal_Print(&terminal, ";", false);
+		main_ShowTemperature();
+		terminal_Print(&terminal, ";", false);
+		terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
+		terminal_SendNL(&terminal, false);	
+	} else {
+		terminal_Print(&terminal, "CHK=", false);
+		terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
+		terminal_Print(&terminal, ", SYN=", false);
+		terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
+		terminal_Print(&terminal, ", LST=", false);
+		terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
+		terminal_Print(&terminal, ", LOF=", false);
+		terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
+		terminal_Print(&terminal, ", HIF=", false);
+		terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
+		terminal_SendNL(&terminal, false);
+		terminal_Print(&terminal, "  f=", false);
+		terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
+		terminal_Print(&terminal, "Hz, error: ", false);
+		if (gpsdo_state.error_frequency >= 0) terminal_Print(&terminal, " ", false);
+		terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
+		terminal_Print(&terminal, "Hz, ", false);
+		main_ShowErrorPpm();
+		terminal_SendNL(&terminal, false);
+		terminal_Print(&terminal, "  " , false);
+		main_ShowTemperature();
+		terminal_Print(&terminal, ", DAC correction: ", false);
+		terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
+		terminal_SendNL(&terminal, false);
+	}
 }
 
 void main_SetFixPin(bool fixed)
