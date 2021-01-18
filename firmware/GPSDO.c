@@ -177,10 +177,6 @@ int main(void)
 	led_SetLed(&led_D1, true, false);
 	led_SetLed(&led_D2, true, false);
 	main_LedUpdate();
-	_delay_ms(100);
-	led_SetLed(&led_D1, false, false);
-	led_SetLed(&led_D2, false, true);
-	main_LedUpdate();
 	
 	// Initialize interrupt
 	PMIC.CTRL = PMIC_HILVLEN_bm | PMIC_LOLVLEN_bm | PMIC_MEDLVLEN_bm | PMIC_RREN_bm;
@@ -219,6 +215,12 @@ int main(void)
 	usart_Init(&usart_gps, &USARTC0, &PORTC, PIN3_bm, PIN2_bm);
 	usart_SetBaudrate(&usart_gps, BAUD_RATE_9600);
 	usart_TxEnable(&usart_gps, true);
+
+	// First part initialization complete
+	_delay_ms(10);
+	led_SetLed(&led_D1, false, false);
+	led_SetLed(&led_D2, false, true);
+	main_LedUpdate();
 
 	// Initialize ADC
 	delays_Init(&timeout_adc_conversion_ms, MAIN_TIMER_ADCCONVERSION_ms);
