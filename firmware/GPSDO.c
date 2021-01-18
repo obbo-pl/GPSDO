@@ -84,6 +84,7 @@ const char DEVICE_INFO[DEVICE_INFO_SIZE]	PROGMEM = "GPSDO "VERSION_MAJOR "." VER
 #define SEQUENTIAL_TO_FIX_CALIBRATION		(uint8_t)(16)
 #define TARGET_PRECISION_ppm			0.1
 
+#define CSV_DELIMITER				","
 
 enum {
 	MAIN_ERROR_MAIN_CLOCK,
@@ -591,23 +592,23 @@ void main_ShowStatus(void)
 	delays_Reset(&timeout_show_temperature_ms);
 	if (gpsdo_state.gpsdo_status_format_csv) {
 		terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
-		terminal_Print(&terminal, ";" , false);
+		terminal_Print(&terminal, CSV_DELIMITER , false);
 		terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		main_ShowErrorPpm();
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		main_ShowTemperature();
-		terminal_Print(&terminal, ";", false);
+		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
 		terminal_SendNL(&terminal, false);	
 	} else {
