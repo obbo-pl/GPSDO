@@ -20,7 +20,6 @@
 
 uint8_t hex2int(const char hex);
 
-void command_SystemVersion(TERMINAL_t *terminal);
 void command_EndTerminalSession(TERMINAL_t *terminal);
 void command_ShowGPSDOStatus(TERMINAL_t *terminal);
 void command_ShowStatusCSVFormat(TERMINAL_t *terminal);
@@ -79,13 +78,13 @@ void command_SystemVersion(TERMINAL_t *terminal)
 
 void command_EndTerminalSession(TERMINAL_t *terminal)
 {
-	cbuffer_AppendString(terminal->output_buffer, "Bye!\n\r");
+	cbuffer_AppendString(terminal->output_buffer, "Bye!\n\r\n\r");
 	state_gpsdo->forward_gps_message = true;
 }
 
 void command_ShowGPSDOStatus(TERMINAL_t *terminal)
 {
-	state_gpsdo->show_gpsdo_status = true;
+	state_gpsdo->show_gpsdo_message = true;
 }
 
 void command_ShowStatusCSVFormat(TERMINAL_t *terminal)

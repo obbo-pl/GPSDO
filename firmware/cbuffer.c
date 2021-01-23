@@ -19,19 +19,25 @@
 
 uint8_t cbuffer_NextItem(CircularBuffer_t *cbuffer, uint8_t pointer);
 
-
-
+#ifdef CBUFFER_INTERNAL_DATA_STORE
 void cbuffer_Init(CircularBuffer_t *cbuffer)
 {
+	cbuffer->length = CBUFFER_LENGTH;
+#else
+void cbuffer_Init(CircularBuffer_t *cbuffer, volatile char *data, uint8_t length)
+{
+	cbuffer->data = data;
+	cbuffer->length = length;
+#endif //CBUFFER_INTERNAL_DATA_STORE
 	cbuffer->start = 0;
 	cbuffer->end = 0;
-	for (uint8_t i = 0; i < CBUFFER_LENGTH; i++) cbuffer->data[i] = 0x00;
+	for (uint8_t i = 0; i < cbuffer->length; i++) cbuffer->data[i] = 0x00;
 }
 
 uint8_t cbuffer_NextItem(CircularBuffer_t *cbuffer, uint8_t item)
 {
 	item++;
-	if (item >= sizeof(cbuffer->data)) item = 0;
+	if (item >= cbuffer->length) item = 0;
 	return item;
 }
 

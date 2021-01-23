@@ -22,6 +22,7 @@
 void ftoa(float f, char *buffer, uint8_t length);
 
 void terminal_commands_Init(GPSDO_State_t *state);
+void command_SystemVersion(TERMINAL_t *terminal);
 
 
 

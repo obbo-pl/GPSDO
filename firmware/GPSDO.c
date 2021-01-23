@@ -84,7 +84,7 @@ const char DEVICE_INFO[DEVICE_INFO_SIZE]	PROGMEM = "GPSDO "VERSION_MAJOR "." VER
 #define SEQUENTIAL_TO_FIX_CALIBRATION		(uint8_t)(16)
 #define TARGET_PRECISION_ppm			0.1
 
-#define CSV_DELIMITER				","
+#define CSV_DELIMITER				";"
 
 enum {
 	MAIN_ERROR_MAIN_CLOCK,
@@ -104,7 +104,7 @@ GPSDO_State_t gpsdo_state = {
 	.max_diff_below_nominal = 0,
 	.forward_gps_message = true,
 	.show_gps_message = false,
-	.show_gpsdo_status = false,
+	.show_gpsdo_message = false,
 	.gpsdo_status_format_csv = false,
 	.disable_frequency_correction = false,
 	.errors = 0,
@@ -125,8 +125,18 @@ MCP47X6_t dac;
 USART_DRIVER_t usart_terminal;
 USART_DRIVER_t usart_gps;
 
-CircularBuffer_t cbuffer;
+#define BUFFER_TERMINAL_DATA_LENGTH		150
+volatile char buffer_terminal_data[BUFFER_TERMINAL_DATA_LENGTH];
+CircularBuffer_t buffer_terminal;
 TERMINAL_t terminal;
+
+#define BUFFER_GPS_DATA_LENGTH			80
+volatile char buffer_gps_data[BUFFER_GPS_DATA_LENGTH];
+CircularBuffer_t buffer_gps;
+
+#define SWITCH_TERMINAL_PIPE_CHAR		(0x40)
+#define SWITCH_TERMINAL_PIPE_REPEATED_KEY	8
+uint8_t switch_terminal_pipe_repeated_key_count = 0;
 
 LPFu16_t filter_temperature;
 #define FILTER_TEMPRATURE_LENGTH		3
@@ -155,6 +165,7 @@ void main_ShowTemperature(void);
 void main_ShowErrorPpm(void);
 void main_ShowStatus(void);
 void main_SetFixPin(bool fixed);
+void main_SendGPSBuffer(void);
 
 
 
@@ -203,8 +214,8 @@ int main(void)
 	usart_SetBaudrate(&usart_terminal, BAUD_RATE_19200);
 	usart_RxEnable(&usart_terminal, true);
 	usart_TxEnable(&usart_terminal, true);
- 	cbuffer_Init(&cbuffer);
- 	terminal_Init(&terminal, &usart_terminal, &cbuffer);
+ 	cbuffer_Init(&buffer_terminal, buffer_terminal_data, BUFFER_TERMINAL_DATA_LENGTH);
+ 	terminal_Init(&terminal, &usart_terminal, &buffer_terminal);
 	terminal_commands_Init(&gpsdo_state);
 	terminal_SendNL(&terminal, true);
 	terminal_PrintPM(&terminal, DEVICE_INFO, true);
@@ -213,8 +224,10 @@ int main(void)
 	// Initialize GPS
 	setbit(CONFIG_GPS_RESET_port.DIRCLR, CONFIG_GPS_RESET_pin);
 	*(&(CONFIG_GPS_RESET_port.PIN0CTRL) + CONFIG_GPS_RESET_pin) = PORT_OPC_WIREDANDPULL_gc;
+	cbuffer_Init(&buffer_gps, buffer_gps_data, BUFFER_GPS_DATA_LENGTH);
 	usart_Init(&usart_gps, &USARTC0, &PORTC, PIN3_bm, PIN2_bm);
 	usart_SetBaudrate(&usart_gps, BAUD_RATE_9600);
+	usart_RxEnable(&usart_gps, true);
 	usart_TxEnable(&usart_gps, true);
 
 	// First part initialization complete
@@ -261,7 +274,6 @@ int main(void)
 	main_SetFixPin(gpsdo_state.calibrated);
 	
 	delays_Init(&timeout_show_temperature_ms, MAIN_TIMER_TEMPERATURE_PRINT_ms);
-	usart_RxEnable(&usart_gps, true);
 	uint8_t command_length;
 	uint16_t temperature_adc;
 	
@@ -281,9 +293,9 @@ int main(void)
 		}
 		// Read frequency
 		if (main_request_frq) {
+			main_request_frq = false;
 			gpsdo_state.gps_fixed = true;
 			_delay_us(1);
-			main_request_frq = false;
 			gpsdo_state.frequency = (((uint32_t)TCD1.CNT << 16) | TCD0.CNT) << 4;
 			if (testbit(CONFIG_FREQUENCY_Q3_port.IN, CONFIG_FREQUENCY_Q3_pin)) gpsdo_state.frequency |= (1 << 3);
 			if (testbit(CONFIG_FREQUENCY_Q2_port.IN, CONFIG_FREQUENCY_Q2_pin)) gpsdo_state.frequency |= (1 << 2);
@@ -326,9 +338,9 @@ int main(void)
 						gpsdo_state.max_diff_below_nominal = gpsdo_state.error_frequency;
 					}
 				}
-				if (gpsdo_state.show_gpsdo_status) main_ShowStatus();
+				if (gpsdo_state.show_gpsdo_message) main_ShowStatus();
 			} else {
-				if (gpsdo_state.show_gpsdo_status) terminal_Print(&terminal, "Frequency out of range\n\r", false);
+				if (gpsdo_state.show_gpsdo_message) terminal_Print(&terminal, "Frequency out of range\n\r", false);
 				setbit(gpsdo_state.errors, MAIN_ERROR_FREQ_OUT_OF_RANGE);
 				if (gpsdo_state.calibrated) gpsdo_state.count_loss_calibration++;
 				main_ClearSyncState();
@@ -338,8 +350,10 @@ int main(void)
 		}
 		// Check terminal buffer
 		terminal_SendOutBuffer(&terminal);
- 		if (terminal.input_is_full) terminal_DropInputBuffer(&terminal);
- 		if (terminal_FindNewLine(&terminal, &command_length)) terminal_ParseCommand(&terminal, command_length);
+		if (terminal_IsBufferFull(&terminal)) terminal_DropInputBuffer(&terminal);
+		if (terminal_FindNewLine(&terminal, &command_length)) terminal_ParseCommand(&terminal, command_length);
+		// Check GPS buffer
+		 main_SendGPSBuffer();
 		// Check timers
 		if (delays_Check(&timeout_adc_conversion_ms)) {
 			main_ADCInitConversion();
@@ -356,7 +370,7 @@ int main(void)
 		}
 		// Show temperature
 		if (delays_Check(&timeout_show_temperature_ms)) {
-			if (gpsdo_state.show_gpsdo_status) {
+			if (gpsdo_state.show_gpsdo_message) {
 				main_ShowTemperature();
 				terminal_SendNL(&terminal, false);
 			}
@@ -364,7 +378,7 @@ int main(void)
 		}
 		// Show Fixed Frequency
 		main_SetFixPin(gpsdo_state.calibrated);
-		led_SetLed(&led_D2, gpsdo_state.gps_fixed, !(gpsdo_state.calibrated));
+		led_SetLed(&led_D2, gpsdo_state.gps_fixed, !(gpsdo_state.calibrated));		
 	}
 }
 
@@ -394,16 +408,35 @@ ISR(USARTC0_RXC_vect)
 	char c = usart_ReadChar(&usart_gps);
 	if (gpsdo_state.forward_gps_message) {
 		if (c == 0x24) gpsdo_state.show_gps_message = true; 
-		if (gpsdo_state.show_gps_message) cbuffer_AppendChar(&cbuffer, c);
+		if (gpsdo_state.show_gps_message) cbuffer_AppendChar(&buffer_terminal, c);
 	}
 }
 
 ISR(USARTD0_RXC_vect)
 {
-	gpsdo_state.forward_gps_message = false;
-	gpsdo_state.show_gps_message = false;
-	gpsdo_state.show_gpsdo_status = false;
-	terminal_InterruptHandler(&terminal);
+	char c = usart_ReadChar(terminal.usart);
+	if (gpsdo_state.forward_gps_message) {
+		if (c == SWITCH_TERMINAL_PIPE_CHAR) {
+			switch_terminal_pipe_repeated_key_count++;
+		} else {
+			switch_terminal_pipe_repeated_key_count = 0;
+		}
+		if (switch_terminal_pipe_repeated_key_count >= SWITCH_TERMINAL_PIPE_REPEATED_KEY) {
+			switch_terminal_pipe_repeated_key_count = 0;
+			gpsdo_state.forward_gps_message = false;
+			gpsdo_state.show_gps_message = false;
+			terminal_SendWelcome(&terminal);
+			command_SystemVersion(&terminal);
+		}
+		if (!cbuffer_IsFull(&buffer_gps)) {
+			cbuffer_AppendChar(&buffer_gps, c);
+		}
+	} else {		
+		gpsdo_state.show_gpsdo_message = false;
+		if (!terminal_IsBufferFull(&terminal)) {
+			terminal_ParseChar(&terminal, c);
+		}
+	}
 }
 
 ISR(PORTC_INT0_vect) 
@@ -645,5 +678,14 @@ void main_SetFixPin(bool fixed)
 		setbit(CONFIG_FREQUENCY_FIXED_port.OUTSET, CONFIG_FREQUENCY_FIXED_pin);
 	} else {
 		setbit(CONFIG_FREQUENCY_FIXED_port.OUTCLR, CONFIG_FREQUENCY_FIXED_pin);		
+	}
+}
+
+void main_SendGPSBuffer(void)
+{
+	bool send_status = true;
+	while (send_status && !(cbuffer_IsEmpty(&buffer_gps))) {
+		send_status = usart_SendChar(&usart_gps, cbuffer_ReadChar(&buffer_gps));
+		if (send_status) cbuffer_DropChar(&buffer_gps);
 	}
 }

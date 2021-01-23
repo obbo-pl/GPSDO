@@ -20,6 +20,7 @@
 uint8_t terminal_commands_array_size = 0;
 TERMINAL_COMMAND_t *terminal_commands_array;
 
+#define TERMINAL_TIMEOUT_FLUSH_ms		280	//max 3276
 
 void terminal_SendHelp(TERMINAL_t *terminal);
 void terminal_SendUnknown(TERMINAL_t *terminal);
@@ -28,10 +29,16 @@ void terminal_ClearCommandOptionBuffer(char *buffer);
 void terminal_ShrinkBuffer(TERMINAL_t *terminal, uint8_t len);
 bool terminal_FindCommand(TERMINAL_t *terminal, uint8_t len);
 
+
+#define TERMINAL_MESSAGE_unknown_command	"? unknown command\n\r"
+#define TERMINAL_MESSAGE_bad_argument		"? bad argument\n\r"
+#define TERMINAL_MESSAGE_ok			"OK\n\r"
+#define TERMINAL_MESSAGE_welcome		"\n\r\n\r@@@@ Terminal mode\n\r"
 #ifdef TERMINAL_MESSAGE_IN_EEPROM
-const char EEMEM terminal_message_001[] = "? unknown command\n\r";
-const char EEMEM terminal_message_002[] = "? bad argument\n\r";
-const char EEMEM terminal_message_003[] = "OK\n\r";
+const char EEMEM terminal_message_001[] = TERMINAL_MESSAGE_unknown_command;
+const char EEMEM terminal_message_002[] = TERMINAL_MESSAGE_bad_argument;
+const char EEMEM terminal_message_003[] = TERMINAL_MESSAGE_ok;
+const char EEMEM terminal_message_004[] = TERMINAL_MESSAGE_welcome;
 #endif
 
 
@@ -49,42 +56,57 @@ void terminal_BindCommands(TERMINAL_COMMAND_t *commands, uint8_t length)
 
 void terminal_InterruptHandler(TERMINAL_t *terminal)
 {
-	char new_char;
-	if (terminal->input_buffer_position < TERMINAL_INPUT_BUFFER_LENGTH) {
-		new_char = usart_ReadChar(terminal->usart);
-		if ((new_char > 0x20) && (new_char < 0x7F)) {
-			terminal->input_buffer[terminal->input_buffer_position] = new_char;
-			terminal->input_buffer_position++;
-			cbuffer_AppendChar(terminal->output_buffer, new_char);
-			} else if (new_char == 0x20) {
-			if (terminal->input_buffer_position > 0) {
-				terminal->input_buffer[terminal->input_buffer_position] = new_char;
-				terminal->input_buffer_position++;
-			}
-			cbuffer_AppendChar(terminal->output_buffer, new_char);
-			} else if (new_char == 0x08) {
-			if (terminal->input_buffer_position > 0) {
-				terminal->input_buffer[terminal->input_buffer_position] = 0x00;
-				terminal->input_buffer_position--;
-			}
-			cbuffer_AppendChar(terminal->output_buffer, new_char);
-			} else if ((new_char == 0x0A) || (new_char == 0x0D)) {
-			if (!(terminal->input_is_empty)) {
-				terminal->input_buffer[terminal->input_buffer_position] = TERMINAL_NEW_LINE;
-				terminal->input_buffer_position++;
-			}
-			terminal_SendNL(terminal, false);
-		}
-		if (terminal->input_buffer_position > 0) terminal->input_is_empty = false;
+	char c = 0x00;
+	if (!(terminal_IsBufferFull(terminal))) {
+		c = usart_ReadChar(terminal->usart);
+		terminal_ParseChar(terminal, c);
 	}
-	if (terminal->input_buffer_position >= TERMINAL_INPUT_BUFFER_LENGTH) terminal->input_is_full = true;
+}
+
+void terminal_ParseChar(TERMINAL_t *terminal, char c)
+{
+	if ((c > 0x20) && (c < 0x7F)) {
+		terminal->input_buffer[terminal->input_buffer_position] = c;
+		terminal->input_buffer_position++;
+		cbuffer_AppendChar(terminal->output_buffer, c);
+	} else if (c == 0x20) {
+		if (terminal->input_buffer_position > 0) {
+			terminal->input_buffer[terminal->input_buffer_position] = c;
+			terminal->input_buffer_position++;
+		}
+		cbuffer_AppendChar(terminal->output_buffer, c);
+	} else if (c == 0x08) {
+		if (terminal->input_buffer_position > 0) {
+			terminal->input_buffer[terminal->input_buffer_position] = 0x00;
+			terminal->input_buffer_position--;
+		}
+		cbuffer_AppendChar(terminal->output_buffer, c);
+	} else if ((c == 0x0A) || (c == 0x0D)) {
+		if (!terminal_IsBufferEmpty(terminal)) {
+			terminal->input_buffer[terminal->input_buffer_position] = TERMINAL_NEW_LINE;
+			terminal->input_buffer_position++;
+		}
+		terminal_SendNL(terminal, false);
+	}
+}
+
+bool terminal_IsBufferEmpty(TERMINAL_t *terminal)
+{
+	if (terminal->input_buffer_position > 0) return false;
+	return true;
+}
+
+bool terminal_IsBufferFull(TERMINAL_t *terminal)
+{
+	if (terminal->input_buffer_position >= TERMINAL_INPUT_BUFFER_LENGTH) return true;
+	return false;
 }
 
 void terminal_ParseCommand(TERMINAL_t *terminal, uint8_t len)
 {
 	terminal_FindCommand(terminal, len);
 	terminal_ShrinkBuffer(terminal, len);
-	if (terminal->input_buffer_position == 0) terminal_ClearInputBuffer(terminal);
+	if (terminal_IsBufferEmpty(terminal)) terminal_ClearInputBuffer(terminal);
 }
 
 bool terminal_FindNewLine(TERMINAL_t *terminal, uint8_t *len)
@@ -96,6 +118,15 @@ bool terminal_FindNewLine(TERMINAL_t *terminal, uint8_t *len)
 		}
 	}
 	return false;
+}
+
+void terminal_SendWelcome(TERMINAL_t *terminal)
+{
+#ifdef TERMINAL_MESSAGE_IN_EEPROM
+	cbuffer_AppendEEString(terminal->output_buffer, terminal_message_004);
+#else
+	cbuffer_AppendString(terminal->output_buffer, TERMINAL_MESSAGE_welcome);
+#endif
 }
 
 void terminal_SendHelp(TERMINAL_t *terminal)
@@ -112,7 +143,7 @@ void terminal_SendUnknown(TERMINAL_t *terminal)
 #ifdef TERMINAL_MESSAGE_IN_EEPROM
 	cbuffer_AppendEEString(terminal->output_buffer, terminal_message_001);
 #else
-	cbuffer_AppendString(terminal->output_buffer, "? unknown command\n\r");
+	cbuffer_AppendString(terminal->output_buffer, TERMINAL_MESSAGE_unknown_command);
 #endif
 }
 
@@ -121,7 +152,7 @@ void terminal_SendOK(TERMINAL_t *terminal)
 #ifdef TERMINAL_MESSAGE_IN_EEPROM
 	cbuffer_AppendEEString(terminal->output_buffer, terminal_message_003);
 #else
-	cbuffer_AppendString(terminal->output_buffer, "OK\n\r");
+	cbuffer_AppendString(terminal->output_buffer, TERMINAL_MESSAGE_ok);
 #endif
 }
 
@@ -130,7 +161,7 @@ void terminal_SendBadArgument(TERMINAL_t *terminal)
 #ifdef TERMINAL_MESSAGE_IN_EEPROM
 	cbuffer_AppendEEString(terminal->output_buffer, terminal_message_002);
 #else
-	cbuffer_AppendString(terminal->output_buffer, "? bad argument\n\r");
+	cbuffer_AppendString(terminal->output_buffer, TERMINAL_MESSAGE_bad_argument);
 #endif
 }
 
@@ -179,8 +210,6 @@ void terminal_ClearInputBuffer(TERMINAL_t *terminal)
 		terminal->input_buffer[i] = 0x00;
 	}
 	terminal->input_buffer_position = 0;
-	terminal->input_is_empty = true;
-	terminal->input_is_full = false;
 }
 
 void terminal_ShrinkBuffer(TERMINAL_t *terminal, uint8_t len)
@@ -212,10 +241,12 @@ void terminal_SendOutBuffer(TERMINAL_t *terminal)
 void terminal_FlushOutBuffer(TERMINAL_t *terminal)
 {
 	bool send_status = true;
-	while (send_status && !(cbuffer_IsEmpty(terminal->output_buffer))) {
+	uint16_t timeout = TERMINAL_TIMEOUT_FLUSH_ms * 20;
+	while (timeout && !(cbuffer_IsEmpty(terminal->output_buffer))) {
 		send_status = usart_SendChar(terminal->usart, cbuffer_ReadChar(terminal->output_buffer));
 		if (send_status) cbuffer_DropChar(terminal->output_buffer);
-		_delay_ms(1);
+		_delay_us(50);
+		timeout--;
 	}
 }
 
