@@ -24,9 +24,11 @@ void command_EndTerminalSession(TERMINAL_t *terminal);
 void command_ShowGPSDOStatus(TERMINAL_t *terminal);
 void command_ShowStatusCSVFormat(TERMINAL_t *terminal);
 void command_DisableFrequencyCorrection(TERMINAL_t *terminal);
+void command_ShowFrequencyDeviation(TERMINAL_t *terminal);
+void command_ClearFrequencyDeviation(TERMINAL_t *terminal);
 
 
-#define TERMINAL_BASE_COMMANDS_COUNT		5
+#define TERMINAL_BASE_COMMANDS_COUNT		7
 #define TERMINAL_COMMANDS_COUNT			(TERMINAL_BASE_COMMANDS_COUNT)
 
 TERMINAL_COMMAND_t terminal_commands[TERMINAL_COMMANDS_COUNT] = {
@@ -35,6 +37,8 @@ TERMINAL_COMMAND_t terminal_commands[TERMINAL_COMMANDS_COUNT] = {
 	{ .pattern = "@SGS", .callback = command_ShowGPSDOStatus,},
 	{ .pattern = "@SSC", .callback = command_ShowStatusCSVFormat,},
 	{ .pattern = "@DFC", .callback = command_DisableFrequencyCorrection,},		
+	{ .pattern = "@SFD", .callback = command_ShowFrequencyDeviation,},
+	{ .pattern = "@CFD", .callback = command_ClearFrequencyDeviation,},
 };
 
 GPSDO_State_t *state_gpsdo;
@@ -78,7 +82,7 @@ void command_SystemVersion(TERMINAL_t *terminal)
 
 void command_EndTerminalSession(TERMINAL_t *terminal)
 {
-	cbuffer_AppendString(terminal->output_buffer, "Bye!\n\r\n\r");
+	terminal_PrintNL(terminal, "Bye!\n\r", false);
 	state_gpsdo->forward_gps_message = true;
 }
 
@@ -108,5 +112,24 @@ void command_DisableFrequencyCorrection(TERMINAL_t *terminal)
 		} else {
 			state_gpsdo->disable_frequency_correction = true;
 		}
+	}
+}
+
+void command_ShowFrequencyDeviation(TERMINAL_t *terminal)
+{
+	state_gpsdo->show_frequency_deviation = true;
+}
+
+void command_ClearFrequencyDeviation(TERMINAL_t *terminal)
+{
+	if (!state_gpsdo->clear_frequency_deviation) {
+		state_gpsdo->clear_frequency_deviation_keep_base = true;
+		if (terminal->command_option[0] == TERMINAL_SPACE) {
+			int temp = atoi(terminal->command_option);
+			if (temp == 0) {
+				state_gpsdo->clear_frequency_deviation_keep_base = false;
+			}
+		}
+		state_gpsdo->clear_frequency_deviation = true;
 	}
 }

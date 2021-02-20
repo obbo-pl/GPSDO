@@ -18,7 +18,7 @@
 typedef struct GPSDO {
 	const char *device_info;
 	uint16_t temperature_raw;
-	uint16_t temperature_k;
+	uint16_t temperature_k100;
 	bool gps_fixed;
 	bool calibrated;
 	uint32_t frequency;
@@ -38,6 +38,10 @@ typedef struct GPSDO {
 	volatile bool gpsdo_status_format_csv;
 	volatile bool disable_frequency_correction;
 	uint8_t errors;
+	uint16_t *frequency_deviation;
+	bool show_frequency_deviation;
+	bool clear_frequency_deviation;
+	bool clear_frequency_deviation_keep_base;
 } GPSDO_State_t;
 
 

@@ -67,13 +67,14 @@ void terminal_SendOK(TERMINAL_t *terminal);
 void terminal_Print(TERMINAL_t *terminal, const char *src, bool flush);
 void terminal_PrintEE(TERMINAL_t *terminal, const char *src, bool flush);
 void terminal_PrintPM(TERMINAL_t *terminal, const char *src, bool flush);
-void terminal_PrintLn(TERMINAL_t *terminal, const char *src, bool flush);
+void terminal_PrintNL(TERMINAL_t *terminal, const char *src, bool flush);
 void terminal_PrintInt(TERMINAL_t *terminal, int val, bool flush);
 void terminal_PrintULong(TERMINAL_t *terminal, uint32_t val, bool flush);
 void terminal_PrintHex(TERMINAL_t *terminal, uint8_t val, bool flush);
 void terminal_PrintBin(TERMINAL_t *terminal, uint8_t val, bool flush);
 void terminal_PrintHexAndBin(TERMINAL_t *terminal, uint8_t val, bool flush);
-void terminal_PrintBuf(TERMINAL_t *terminal, const uint8_t *buffer, uint8_t len, bool flush);
+void terminal_PrintBuf(TERMINAL_t *terminal, uint8_t *buffer, uint8_t len, bool flush);
+void terminal_PrintEEBufDump(TERMINAL_t *terminal, uint8_t *buffer, uint8_t len, bool flush);
 void terminal_SendNL(TERMINAL_t *terminal, bool flush);
 
 

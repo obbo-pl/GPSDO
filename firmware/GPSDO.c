@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <avr/pgmspace.h>
 #include <math.h>
+#include <avr/eeprom.h>
 #include "types.h"
 #include "macro.h"
 #include "config.h"
@@ -77,6 +78,7 @@ const char DEVICE_INFO[DEVICE_INFO_SIZE]	PROGMEM = "GPSDO "VERSION_MAJOR "." VER
 #define DAC_VALUE_BASE				(uint16_t)((DAC_VALUE_HIGH + DAC_VALUE_LOW) / 2)
 #define DAC_CORRECTION_FACTOR			1.8
 #define DAC_FILTER_SCALE			2
+#define DAC_WORD_LENGTH				12
 
 #define VCXO_FREQUENCY_LOW			(CONFIG_VCXO_NOMINAL_FREQUENCY - (2 * CONFIG_VCXO_ADJUST_RANGE_ppm * CONFIG_VCXO_NOMINAL_FREQUENCY) / 1000000)
 #define VCXO_FREQUENCY_HIGH			(CONFIG_VCXO_NOMINAL_FREQUENCY + (2 * CONFIG_VCXO_ADJUST_RANGE_ppm * CONFIG_VCXO_NOMINAL_FREQUENCY) / 1000000)
@@ -91,6 +93,16 @@ enum {
 	MAIN_ERROR_ADC_TIMEOUT,
 	MAIN_ERROR_FREQ_OUT_OF_RANGE
 };
+
+#define FREQUENCY_DEVIATION_ARRAY_SIZE		500
+#define FREQUENCY_DEVIATION_TEMP_BASE_K10	(uint16_t)(2831)
+#define FREQUENCY_DEVIATION_MASK		0x001F
+#define FREQUENCY_DEVIATION_MASK_LENGTH		5
+#define FREQUENCY_DEVIATION_EMPTY_CELL		0xFFFF
+// most significant bits - DAC value
+// least significant bits - half of the DAC deviation value 
+uint16_t EEMEM frequency_deviation[FREQUENCY_DEVIATION_ARRAY_SIZE];
+
 
 GPSDO_State_t gpsdo_state = {
 	.device_info = DEVICE_INFO,
@@ -108,18 +120,19 @@ GPSDO_State_t gpsdo_state = {
 	.gpsdo_status_format_csv = false,
 	.disable_frequency_correction = false,
 	.errors = 0,
+	.frequency_deviation = frequency_deviation,
+	.show_frequency_deviation = false,
+	.clear_frequency_deviation = false,
+	.clear_frequency_deviation_keep_base = true,
 	};
 
 volatile bool main_request_led;
 volatile bool main_request_adc;
 volatile bool main_request_frq;
 
-LED_t led_D1 = {
-	.configured = false
-	};
-LED_t led_D2 = {
-	.configured = false
-	};
+LED_t led_D1;
+LED_t led_D2;
+
 TWI_Master_t twiMaster;
 MCP47X6_t dac;
 USART_DRIVER_t usart_terminal;
@@ -166,7 +179,12 @@ void main_ShowErrorPpm(void);
 void main_ShowStatus(void);
 void main_SetFixPin(bool fixed);
 void main_SendGPSBuffer(void);
-
+bool main_GetFrequencyDeviationArrayIndex(uint16_t temp_k10, uint16_t *idx);
+void main_ReadDeviation(uint16_t idx, uint16_t *min, uint16_t *max);
+void main_UpdateDeviation(uint16_t idx, uint16_t min, uint16_t max);
+void main_CatchFrequencyDeviation(void);
+void main_ShowFrequencyDeviation(void);
+void main_ClearFrequencyDeviation(bool keep_base);
 
 
 int main(void)
@@ -288,7 +306,7 @@ int main(void)
 		if (main_request_adc) {
 			temperature_adc = adc_ReadInput();
 			gpsdo_state.temperature_raw = lpfilter_Filter(&filter_temperature, temperature_adc);
-			gpsdo_state.temperature_k = main_NTCTermistorToKelvin(gpsdo_state.temperature_raw);
+			gpsdo_state.temperature_k100 = main_NTCTermistorToKelvin(gpsdo_state.temperature_raw);
 			main_ADCInitConversion();
 		}
 		// Read frequency
@@ -337,6 +355,7 @@ int main(void)
 					if (gpsdo_state.error_frequency < gpsdo_state.max_diff_below_nominal) {
 						gpsdo_state.max_diff_below_nominal = gpsdo_state.error_frequency;
 					}
+					if (gpsdo_state.error_ppm <= TARGET_PRECISION_ppm) main_CatchFrequencyDeviation();
 				}
 				if (gpsdo_state.show_gpsdo_message) main_ShowStatus();
 			} else {
@@ -352,6 +371,8 @@ int main(void)
 		terminal_SendOutBuffer(&terminal);
 		if (terminal_IsBufferFull(&terminal)) terminal_DropInputBuffer(&terminal);
 		if (terminal_FindNewLine(&terminal, &command_length)) terminal_ParseCommand(&terminal, command_length);
+		if (gpsdo_state.clear_frequency_deviation) main_ClearFrequencyDeviation(gpsdo_state.clear_frequency_deviation_keep_base);
+		if (gpsdo_state.show_frequency_deviation) main_ShowFrequencyDeviation();
 		// Check GPS buffer
 		 main_SendGPSBuffer();
 		// Check timers
@@ -596,7 +617,7 @@ void main_ShowTemperature(void)
 		terminal_Print(&terminal, "Temperature=", false);
 	}
 	char buffer[8];
-	ftoa((float)(gpsdo_state.temperature_k - 27315) / 100, buffer, 8);
+	ftoa((float)(gpsdo_state.temperature_k100 - 27315) / 100, buffer, 8);
 	terminal_Print(&terminal, buffer, false);
 	if (!gpsdo_state.gpsdo_status_format_csv) {
 		terminal_Print(&terminal, "\xF8""C" , false);
@@ -687,5 +708,114 @@ void main_SendGPSBuffer(void)
 	while (send_status && !(cbuffer_IsEmpty(&buffer_gps))) {
 		send_status = usart_SendChar(&usart_gps, cbuffer_ReadChar(&buffer_gps));
 		if (send_status) cbuffer_DropChar(&buffer_gps);
+	}
+}
+
+bool main_GetFrequencyDeviationArrayIndex(uint16_t temp_k10, uint16_t *idx)
+{	
+	if ((temp_k10 >= FREQUENCY_DEVIATION_TEMP_BASE_K10) && (temp_k10 < FREQUENCY_DEVIATION_TEMP_BASE_K10 + FREQUENCY_DEVIATION_ARRAY_SIZE)) {
+		*idx = (uint16_t)(temp_k10 - FREQUENCY_DEVIATION_TEMP_BASE_K10);
+		return true;
+	}
+	return false;
+}
+
+void main_ReadDeviation(uint16_t idx, uint16_t *min, uint16_t *max)
+{
+	uint16_t base;
+	uint16_t dev;
+	
+	uint16_t v = eeprom_read_word(&frequency_deviation[idx]);
+	if (v == FREQUENCY_DEVIATION_EMPTY_CELL) {
+		*min = 0xFFFF;
+		*max = 0x0000;
+		return;
+	}
+	base = v >> FREQUENCY_DEVIATION_MASK_LENGTH;
+	dev = (v & FREQUENCY_DEVIATION_MASK);
+	*min = base - dev;
+	*max = base + dev;
+}
+
+void main_UpdateDeviation(uint16_t idx, uint16_t min, uint16_t max)
+{
+	uint32_t base;
+	uint16_t dev;
+	
+	if (max < min) return;
+	base = (max + min) >> 1;
+	dev = (max - min) >> 1;
+	if (dev > FREQUENCY_DEVIATION_MASK) dev = FREQUENCY_DEVIATION_MASK;
+	uint16_t v = (uint16_t)(base << FREQUENCY_DEVIATION_MASK_LENGTH) | dev;
+	if (v != FREQUENCY_DEVIATION_EMPTY_CELL) {
+		uint16_t last = eeprom_read_word(&frequency_deviation[idx]);
+		if (last != v) {
+			eeprom_write_word(&frequency_deviation[idx], v); 
+		}
+	}
+}
+
+void main_CatchFrequencyDeviation(void)
+{
+	uint16_t idx;
+	uint16_t t_k10 = (uint16_t)(gpsdo_state.temperature_k100 / 10);
+	uint16_t min;
+	uint16_t max;
+	
+	if (main_GetFrequencyDeviationArrayIndex(t_k10, &idx)) {
+		main_ReadDeviation(idx, &min, &max);
+		uint8_t shrink = 0;
+		if (DAC_WORD_LENGTH > (16 - FREQUENCY_DEVIATION_MASK_LENGTH)) {
+			shrink = (uint8_t)(DAC_WORD_LENGTH - (16 - FREQUENCY_DEVIATION_MASK_LENGTH));
+		}
+		uint16_t val = gpsdo_state.dac_value >> shrink;
+		if ((val < min) || (val > max)) {
+			if (val < min) min = val;
+			if (val > max) max = val;
+			main_UpdateDeviation(idx, min, max);
+		}
+	}
+}
+
+void main_ShowFrequencyDeviation(void)
+{
+	static uint16_t i = 0;
+	
+	if (i == 0) i = FREQUENCY_DEVIATION_ARRAY_SIZE;
+	if (cbuffer_IsEmpty(&buffer_terminal)) {
+		if (i) {
+			uint16_t cell = FREQUENCY_DEVIATION_ARRAY_SIZE - i;
+			uint16_t v = eeprom_read_word(&frequency_deviation[cell]);
+			if (v != FREQUENCY_DEVIATION_EMPTY_CELL) {
+				terminal_PrintInt(&terminal, cell, false);
+				terminal_Print(&terminal, CSV_DELIMITER, false);
+				terminal_PrintInt(&terminal, (int)(v >> FREQUENCY_DEVIATION_MASK_LENGTH), false);
+				terminal_Print(&terminal, CSV_DELIMITER, false);
+				terminal_PrintInt(&terminal, (int)(v & FREQUENCY_DEVIATION_MASK), false);
+				terminal_SendNL(&terminal, false);
+			}
+			i--;
+			if (i == 0) gpsdo_state.show_frequency_deviation = false;
+		}
+	}
+}
+
+void main_ClearFrequencyDeviation(bool keep_base)
+{
+	static uint16_t i = 0;
+	
+	if (i == 0) i = FREQUENCY_DEVIATION_ARRAY_SIZE;
+	if (i) {
+		i--;
+		uint16_t v = FREQUENCY_DEVIATION_EMPTY_CELL;
+		if (keep_base) {
+			v = eeprom_read_word(&frequency_deviation[i]) & ~(FREQUENCY_DEVIATION_MASK);
+		}
+		eeprom_write_word(&frequency_deviation[i], v);
+		if (i == 0) {
+			gpsdo_state.clear_frequency_deviation_keep_base = true;
+			gpsdo_state.clear_frequency_deviation = false;
+			terminal_PrintNL(&terminal, "Done", false);
+		}
 	}
 }

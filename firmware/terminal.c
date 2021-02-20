@@ -93,7 +93,7 @@ void terminal_ParseChar(TERMINAL_t *terminal, char c)
 bool terminal_IsBufferEmpty(TERMINAL_t *terminal)
 {
 	if (terminal->input_buffer_position > 0) return false;
-	return true;
+	return false;
 }
 
 bool terminal_IsBufferFull(TERMINAL_t *terminal)
@@ -268,7 +268,7 @@ void terminal_PrintPM(TERMINAL_t *terminal, const char *src, bool flush)
 	if (flush) terminal_FlushOutBuffer(terminal);
 }
 
-void terminal_PrintLn(TERMINAL_t *terminal, const char *src, bool flush)
+void terminal_PrintNL(TERMINAL_t *terminal, const char *src, bool flush)
 {
 	terminal_Print(terminal, src, flush);
 	terminal_SendNL(terminal, flush);
@@ -327,10 +327,27 @@ void terminal_PrintHexAndBin(TERMINAL_t *terminal, uint8_t val, bool flush)
 	terminal_SendNL(terminal, flush);
 }
 
-void terminal_PrintBuf(TERMINAL_t *terminal, const uint8_t *buffer, uint8_t len, bool flush)
+// print buffer as value, most significant byte first
+void terminal_PrintBuf(TERMINAL_t *terminal, uint8_t *buffer, uint8_t len, bool flush)
 {
 	while (len--) {
 		terminal_PrintHex(terminal, buffer[len], flush);
+	}
+	if (flush) terminal_FlushOutBuffer(terminal);
+}
+
+void terminal_PrintEEBufDump(TERMINAL_t *terminal, uint8_t *buffer, uint8_t len, bool flush)
+{
+	uint8_t nl = 0;
+	while (len--) {
+		terminal_PrintHex(terminal, eeprom_read_byte(buffer++), flush);
+		nl++;
+		if (nl >= 16) {
+			cbuffer_AppendString(terminal->output_buffer, "\n\r");
+			nl = 0;
+		} else {
+			cbuffer_AppendString(terminal->output_buffer, " ");
+		}
 	}
 	if (flush) terminal_FlushOutBuffer(terminal);
 }
