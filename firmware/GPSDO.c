@@ -58,16 +58,12 @@ Interrupt Levels:
 */
 
 #define VERSION_MAJOR				"1"
-#define VERSION_MINOR				"0"
+#define VERSION_MINOR				"1"
 #define DEVICE_INFO_SIZE			64
 const char DEVICE_INFO[DEVICE_INFO_SIZE]	PROGMEM = "GPSDO "VERSION_MAJOR "." VERSION_MINOR " (build: " __DATE__ " " __TIME__ ")\n\r";
 
 #define MAIN_RTC_PERIOD_ms			50
-
 #define MAIN_TIMEOUT_MAINCLOCK_ms		200
-#define MAIN_TIMER_ADCCONVERSION_ms		1000
-#define MAIN_TIMER_TEMPERATURE_PRINT_ms		2100
-#define MAIN_TIMER_PPS_SIGNAL_ms		2500
 
 #define TWI_CLK					100000
 #define TWI_BAUDSETTING				TWI_BAUD(F_CPU, TWI_CLK)
@@ -94,20 +90,29 @@ enum {
 	MAIN_ERROR_FREQ_OUT_OF_RANGE
 };
 
+
 #define FREQUENCY_DEVIATION_ARRAY_SIZE		500
 #define FREQUENCY_DEVIATION_TEMP_BASE_K10	(uint16_t)(2831)
 #define FREQUENCY_DEVIATION_MASK		0x001F
 #define FREQUENCY_DEVIATION_MASK_LENGTH		5
 #define FREQUENCY_DEVIATION_EMPTY_CELL		0xFFFF
-// most significant bits - DAC value
+// most significant bits - DAC value (base)
 // least significant bits - half of the DAC deviation value 
 uint16_t EEMEM frequency_deviation[FREQUENCY_DEVIATION_ARRAY_SIZE];
+
+#if (DAC_WORD_LENGTH > (16 - FREQUENCY_DEVIATION_MASK_LENGTH))
+#define DAC_WORD_SHRINK				(uint8_t)(DAC_WORD_LENGTH - (16 - FREQUENCY_DEVIATION_MASK_LENGTH))
+#else
+#define DAC_WORD_SHRINK				0
+#endif 
+
 
 
 GPSDO_State_t gpsdo_state = {
 	.device_info = DEVICE_INFO,
 	.gps_fixed = false,
 	.calibrated = false,
+	.frequency_measured = false,
 	.sequential_calibrated = 0,
 	.count_checks = 0,
 	.count_calibrated = 0,
@@ -119,6 +124,7 @@ GPSDO_State_t gpsdo_state = {
 	.show_gpsdo_message = false,
 	.gpsdo_status_format_csv = false,
 	.disable_frequency_correction = false,
+	.disable_gps_correction = false,
 	.errors = 0,
 	.frequency_deviation = frequency_deviation,
 	.show_frequency_deviation = false,
@@ -126,9 +132,10 @@ GPSDO_State_t gpsdo_state = {
 	.clear_frequency_deviation_keep_base = true,
 	};
 
-volatile bool main_request_led;
-volatile bool main_request_adc;
-volatile bool main_request_frq;
+volatile bool main_request_led = false;
+volatile bool main_request_adc = false;
+volatile bool main_request_frq = false;
+bool main_request_show_state = false;
 
 LED_t led_D1;
 LED_t led_D2;
@@ -152,13 +159,18 @@ CircularBuffer_t buffer_gps;
 uint8_t switch_terminal_pipe_repeated_key_count = 0;
 
 LPFu16_t filter_temperature;
-#define FILTER_TEMPRATURE_LENGTH		3
+#define FILTER_TEMPRATURE_LENGTH		4
 LPFu16_t filter_dac_value;
 #define FILTER_DAC_VALUE_LENGTH			3
 
+#define MAIN_TIMER_ADCCONVERSION_ms		1000
 DELAY_t timeout_adc_conversion_ms;
+#define MAIN_TIMER_PPS_SIGNAL_ms		2500
 DELAY_t timeout_pps_signal_lost_ms;
-DELAY_t timeout_show_temperature_ms;
+#define MAIN_TIMER_STATE_SHOW_ms		2000
+DELAY_t timeout_show_state_ms;
+#define MAIN_TIMER_CORRECTION_ms		500
+DELAY_t timeout_correction_on_temp_ms;
 
 
 // Prototypes of functions
@@ -179,12 +191,15 @@ void main_ShowErrorPpm(void);
 void main_ShowStatus(void);
 void main_SetFixPin(bool fixed);
 void main_SendGPSBuffer(void);
+void main_SetDAC(uint16_t val);
 bool main_GetFrequencyDeviationArrayIndex(uint16_t temp_k10, uint16_t *idx);
-void main_ReadDeviation(uint16_t idx, uint16_t *min, uint16_t *max);
-void main_UpdateDeviation(uint16_t idx, uint16_t min, uint16_t max);
+bool main_ReadEEPROMDeviation(uint16_t idx, uint16_t *min, uint16_t *max);
+bool main_GetFrequencyDeviationBase(uint16_t idx, uint16_t *base);
+void main_UpdateEEPROMDeviation(uint16_t idx, uint16_t min, uint16_t max);
 void main_CatchFrequencyDeviation(void);
-void main_ShowFrequencyDeviation(void);
-void main_ClearFrequencyDeviation(bool keep_base);
+void main_ShowEEPROMDeviation(void);
+void main_ClearEEPROMDeviation(bool keep_base);
+float main_ErrorFrequencyToPPM(int f);
 
 
 int main(void)
@@ -291,9 +306,11 @@ int main(void)
 	setbit(CONFIG_FREQUENCY_FIXED_port.DIRSET, CONFIG_FREQUENCY_FIXED_pin);	
 	main_SetFixPin(gpsdo_state.calibrated);
 	
-	delays_Init(&timeout_show_temperature_ms, MAIN_TIMER_TEMPERATURE_PRINT_ms);
+	delays_Init(&timeout_show_state_ms, MAIN_TIMER_STATE_SHOW_ms);
+	delays_Init(&timeout_correction_on_temp_ms, MAIN_TIMER_CORRECTION_ms);
 	uint8_t command_length;
 	uint16_t temperature_adc;
+	uint32_t temperature_filter_ready = 1 << FILTER_TEMPRATURE_LENGTH;
 	
 	led_SetLed(&led_D1, true, false);
 	while(1) {
@@ -307,6 +324,7 @@ int main(void)
 			temperature_adc = adc_ReadInput();
 			gpsdo_state.temperature_raw = lpfilter_Filter(&filter_temperature, temperature_adc);
 			gpsdo_state.temperature_k100 = main_NTCTermistorToKelvin(gpsdo_state.temperature_raw);
+			if (temperature_filter_ready > 0) temperature_filter_ready--;
 			main_ADCInitConversion();
 		}
 		// Read frequency
@@ -322,16 +340,13 @@ int main(void)
 			delays_Reset(&timeout_pps_signal_lost_ms);
  			main_FrequencyDividerReset();
 			if (main_IsFrequencyInRange(gpsdo_state.frequency)) {
-				gpsdo_state.dac_value_diff_last = gpsdo_state.dac_value - DAC_VALUE_BASE;
+				gpsdo_state.frequency_measured = true;
+				main_request_show_state = true;
 				gpsdo_state.error_frequency = gpsdo_state.frequency - CONFIG_VCXO_NOMINAL_FREQUENCY;
-				uint16_t dac_value_new = ((1 << DAC_FILTER_SCALE) * (gpsdo_state.dac_value - DAC_CORRECTION_FACTOR * gpsdo_state.error_frequency));
-				gpsdo_state.dac_value = (lpfilter_Filter(&filter_dac_value, dac_value_new) >> DAC_FILTER_SCALE);
-				if (gpsdo_state.disable_frequency_correction) gpsdo_state.dac_value = DAC_VALUE_BASE;
-				mcp47x6_SetOutputLevel(&dac, gpsdo_state.dac_value);
-				gpsdo_state.error_ppm = gpsdo_state.error_frequency;
-				if (gpsdo_state.error_ppm < 0) gpsdo_state.error_ppm = -gpsdo_state.error_ppm;
-				gpsdo_state.error_ppm++;
-				gpsdo_state.error_ppm /= (CONFIG_VCXO_NOMINAL_FREQUENCY / 1000000);
+				if (!gpsdo_state.disable_gps_correction) {
+					main_SetDAC(gpsdo_state.dac_value - DAC_CORRECTION_FACTOR * gpsdo_state.error_frequency);
+				}
+				gpsdo_state.error_ppm = main_ErrorFrequencyToPPM(gpsdo_state.error_frequency);
 				if (gpsdo_state.error_ppm <= TARGET_PRECISION_ppm) {
 					if (gpsdo_state.sequential_calibrated >= SEQUENTIAL_TO_FIX_CALIBRATION) {
 						if (!(gpsdo_state.calibrated)) {
@@ -357,8 +372,8 @@ int main(void)
 					}
 					if (gpsdo_state.error_ppm <= TARGET_PRECISION_ppm) main_CatchFrequencyDeviation();
 				}
-				if (gpsdo_state.show_gpsdo_message) main_ShowStatus();
 			} else {
+				gpsdo_state.frequency_measured = false;
 				if (gpsdo_state.show_gpsdo_message) terminal_Print(&terminal, "Frequency out of range\n\r", false);
 				setbit(gpsdo_state.errors, MAIN_ERROR_FREQ_OUT_OF_RANGE);
 				if (gpsdo_state.calibrated) gpsdo_state.count_loss_calibration++;
@@ -367,12 +382,25 @@ int main(void)
 			main_ClearFrequencyCounter();	
 			gpsdo_state.count_checks++;
 		}
+		// Correction based on temperature
+		if ((!gpsdo_state.frequency_measured || gpsdo_state.disable_gps_correction) && temperature_filter_ready == 0)	{
+			if (delays_Check(&timeout_correction_on_temp_ms)) {
+				uint16_t idx;
+				uint16_t base;
+				if (main_GetFrequencyDeviationArrayIndex(gpsdo_state.temperature_k100, &idx)) {
+					if (main_GetFrequencyDeviationBase(idx, &base)) {
+						main_SetDAC(base);
+					}
+				}
+				delays_Reset(&timeout_correction_on_temp_ms);
+			}
+		}
 		// Check terminal buffer
 		terminal_SendOutBuffer(&terminal);
 		if (terminal_IsBufferFull(&terminal)) terminal_DropInputBuffer(&terminal);
 		if (terminal_FindNewLine(&terminal, &command_length)) terminal_ParseCommand(&terminal, command_length);
-		if (gpsdo_state.clear_frequency_deviation) main_ClearFrequencyDeviation(gpsdo_state.clear_frequency_deviation_keep_base);
-		if (gpsdo_state.show_frequency_deviation) main_ShowFrequencyDeviation();
+		if (gpsdo_state.clear_frequency_deviation) main_ClearEEPROMDeviation(gpsdo_state.clear_frequency_deviation_keep_base);
+		if (gpsdo_state.show_frequency_deviation) main_ShowEEPROMDeviation();
 		// Check GPS buffer
 		 main_SendGPSBuffer();
 		// Check timers
@@ -383,21 +411,20 @@ int main(void)
 		}
 		if (delays_Check(&timeout_pps_signal_lost_ms)) {
 			gpsdo_state.gps_fixed = false;
+			gpsdo_state.frequency_measured = false;
 			if (gpsdo_state.calibrated) gpsdo_state.count_loss_calibration++;
 			main_ClearSyncState();
  			main_FrequencyDividerReset();
 			_delay_us(1);
 			main_ClearFrequencyCounter();
 		}
-		// Show temperature
-		if (delays_Check(&timeout_show_temperature_ms)) {
-			if (gpsdo_state.show_gpsdo_message) {
-				main_ShowTemperature();
-				terminal_SendNL(&terminal, false);
-			}
-			delays_Reset(&timeout_show_temperature_ms);
+		// Show state
+		if ((!gpsdo_state.frequency_measured && delays_Check(&timeout_show_state_ms)) || main_request_show_state) {
+			if (gpsdo_state.show_gpsdo_message) main_ShowStatus();
+			delays_Reset(&timeout_show_state_ms);
+			main_request_show_state = false;
 		}
-		// Show Fixed Frequency
+		// Show "Fixed Frequency"
 		main_SetFixPin(gpsdo_state.calibrated);
 		led_SetLed(&led_D2, gpsdo_state.gps_fixed, !(gpsdo_state.calibrated));		
 	}
@@ -409,7 +436,8 @@ ISR(RTC_OVF_vect)
 	main_request_led = true;
 	delays_Update(&timeout_adc_conversion_ms, MAIN_RTC_PERIOD_ms);
 	delays_Update(&timeout_pps_signal_lost_ms, MAIN_RTC_PERIOD_ms);
-	delays_Update(&timeout_show_temperature_ms, MAIN_RTC_PERIOD_ms);
+	delays_Update(&timeout_show_state_ms, MAIN_RTC_PERIOD_ms);
+	delays_Update(&timeout_correction_on_temp_ms, MAIN_RTC_PERIOD_ms);
 }
 
 // ADC conversion complete
@@ -643,51 +671,56 @@ void main_ShowErrorPpm(void)
 
 void main_ShowStatus(void)
 {
-	delays_Reset(&timeout_show_temperature_ms);
 	if (gpsdo_state.gpsdo_status_format_csv) {
-		terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
 		terminal_Print(&terminal, CSV_DELIMITER, false);
-		terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
 		terminal_Print(&terminal, CSV_DELIMITER, false);
-		terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
 		terminal_Print(&terminal, CSV_DELIMITER, false);
-		terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
 		terminal_Print(&terminal, CSV_DELIMITER, false);
-		terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
 		terminal_Print(&terminal, CSV_DELIMITER , false);
-		terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
 		terminal_Print(&terminal, CSV_DELIMITER, false);
-		terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
+		if (gpsdo_state.frequency_measured) terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
 		terminal_Print(&terminal, CSV_DELIMITER, false);
-		main_ShowErrorPpm();
+		if (gpsdo_state.frequency_measured) main_ShowErrorPpm();
 		terminal_Print(&terminal, CSV_DELIMITER, false);
 		main_ShowTemperature();
 		terminal_Print(&terminal, CSV_DELIMITER, false);
 		terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
 		terminal_SendNL(&terminal, false);	
 	} else {
-		terminal_Print(&terminal, "CHK=", false);
-		terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
-		terminal_Print(&terminal, ", SYN=", false);
-		terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
-		terminal_Print(&terminal, ", LST=", false);
-		terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
-		terminal_Print(&terminal, ", LOF=", false);
-		terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
-		terminal_Print(&terminal, ", HIF=", false);
-		terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
-		terminal_SendNL(&terminal, false);
-		terminal_Print(&terminal, "  f=", false);
-		terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
-		terminal_Print(&terminal, "Hz, error: ", false);
-		if (gpsdo_state.error_frequency >= 0) terminal_Print(&terminal, " ", false);
-		terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
-		terminal_Print(&terminal, "Hz, ", false);
-		main_ShowErrorPpm();
-		terminal_SendNL(&terminal, false);
-		terminal_Print(&terminal, "  " , false);
+		if (gpsdo_state.frequency_measured) {
+			terminal_Print(&terminal, "CHK=", false);
+			terminal_PrintULong(&terminal, gpsdo_state.count_checks, false);
+			terminal_Print(&terminal, ", ", false);
+			if (gpsdo_state.disable_gps_correction) terminal_Print(&terminal, "*", false);
+			terminal_Print(&terminal, "SYN=", false);
+			terminal_PrintULong(&terminal, gpsdo_state.count_calibrated, false);
+			terminal_Print(&terminal, ", LST=", false);
+			terminal_PrintULong(&terminal, gpsdo_state.count_loss_calibration, false);
+			terminal_Print(&terminal, ", LOF=", false);
+			terminal_PrintInt(&terminal, gpsdo_state.max_diff_below_nominal, false);
+			terminal_Print(&terminal, ", HIF=", false);
+			terminal_PrintInt(&terminal, gpsdo_state.max_diff_above_nominal, false);
+			terminal_SendNL(&terminal, false);
+			terminal_Print(&terminal, "  f=", false);
+			terminal_PrintULong(&terminal, gpsdo_state.frequency, false);
+			terminal_Print(&terminal, "Hz, error: ", false);
+			if (gpsdo_state.error_frequency >= 0) terminal_Print(&terminal, " ", false);
+			terminal_PrintInt(&terminal, gpsdo_state.error_frequency, false);
+			terminal_Print(&terminal, "Hz, ", false);
+			main_ShowErrorPpm();
+			terminal_SendNL(&terminal, false);
+			terminal_Print(&terminal, "  " , false);
+		}
 		main_ShowTemperature();
-		terminal_Print(&terminal, ", DAC correction: ", false);
+		terminal_Print(&terminal, ", ", false);
+		if (gpsdo_state.disable_frequency_correction) terminal_Print(&terminal, "*", false);
+		terminal_Print(&terminal, "DAC correction: ", false);
 		terminal_PrintInt(&terminal, gpsdo_state.dac_value_diff_last, false);
 		terminal_SendNL(&terminal, false);
 	}
@@ -711,16 +744,29 @@ void main_SendGPSBuffer(void)
 	}
 }
 
-bool main_GetFrequencyDeviationArrayIndex(uint16_t temp_k10, uint16_t *idx)
+void main_SetDAC(uint16_t val)
+{
+	gpsdo_state.dac_value_diff_last = gpsdo_state.dac_value - DAC_VALUE_BASE;	
+	if (gpsdo_state.disable_frequency_correction) {
+		gpsdo_state.dac_value = DAC_VALUE_BASE;
+	} else {
+		val = (1 << DAC_FILTER_SCALE) * val;
+		gpsdo_state.dac_value = (lpfilter_Filter(&filter_dac_value, val) >> DAC_FILTER_SCALE);
+	}
+	mcp47x6_SetOutputLevel(&dac, gpsdo_state.dac_value);
+};
+
+bool main_GetFrequencyDeviationArrayIndex(uint16_t temperature, uint16_t *idx)
 {	
-	if ((temp_k10 >= FREQUENCY_DEVIATION_TEMP_BASE_K10) && (temp_k10 < FREQUENCY_DEVIATION_TEMP_BASE_K10 + FREQUENCY_DEVIATION_ARRAY_SIZE)) {
-		*idx = (uint16_t)(temp_k10 - FREQUENCY_DEVIATION_TEMP_BASE_K10);
+	temperature = (uint16_t)(temperature / 10);
+	if ((temperature >= FREQUENCY_DEVIATION_TEMP_BASE_K10) && (temperature < FREQUENCY_DEVIATION_TEMP_BASE_K10 + FREQUENCY_DEVIATION_ARRAY_SIZE)) {
+		*idx = (uint16_t)(temperature - FREQUENCY_DEVIATION_TEMP_BASE_K10);
 		return true;
 	}
 	return false;
 }
 
-void main_ReadDeviation(uint16_t idx, uint16_t *min, uint16_t *max)
+bool main_ReadEEPROMDeviation(uint16_t idx, uint16_t *min, uint16_t *max)
 {
 	uint16_t base;
 	uint16_t dev;
@@ -729,15 +775,24 @@ void main_ReadDeviation(uint16_t idx, uint16_t *min, uint16_t *max)
 	if (v == FREQUENCY_DEVIATION_EMPTY_CELL) {
 		*min = 0xFFFF;
 		*max = 0x0000;
-		return;
+		return false;
 	}
 	base = v >> FREQUENCY_DEVIATION_MASK_LENGTH;
 	dev = (v & FREQUENCY_DEVIATION_MASK);
 	*min = base - dev;
 	*max = base + dev;
+	return true;
 }
 
-void main_UpdateDeviation(uint16_t idx, uint16_t min, uint16_t max)
+bool main_GetFrequencyDeviationBase(uint16_t idx, uint16_t *base)
+{
+	uint16_t v = eeprom_read_word(&frequency_deviation[idx]);
+	if (v == FREQUENCY_DEVIATION_EMPTY_CELL) return false;
+	*base = (v >> FREQUENCY_DEVIATION_MASK_LENGTH) << DAC_WORD_SHRINK;
+	return true;
+}
+
+void main_UpdateEEPROMDeviation(uint16_t idx, uint16_t min, uint16_t max)
 {
 	uint32_t base;
 	uint16_t dev;
@@ -758,26 +813,21 @@ void main_UpdateDeviation(uint16_t idx, uint16_t min, uint16_t max)
 void main_CatchFrequencyDeviation(void)
 {
 	uint16_t idx;
-	uint16_t t_k10 = (uint16_t)(gpsdo_state.temperature_k100 / 10);
 	uint16_t min;
 	uint16_t max;
 	
-	if (main_GetFrequencyDeviationArrayIndex(t_k10, &idx)) {
-		main_ReadDeviation(idx, &min, &max);
-		uint8_t shrink = 0;
-		if (DAC_WORD_LENGTH > (16 - FREQUENCY_DEVIATION_MASK_LENGTH)) {
-			shrink = (uint8_t)(DAC_WORD_LENGTH - (16 - FREQUENCY_DEVIATION_MASK_LENGTH));
-		}
-		uint16_t val = gpsdo_state.dac_value >> shrink;
+	if (main_GetFrequencyDeviationArrayIndex(gpsdo_state.temperature_k100, &idx)) {
+		main_ReadEEPROMDeviation(idx, &min, &max);	
+		uint16_t val = gpsdo_state.dac_value >> DAC_WORD_SHRINK;
 		if ((val < min) || (val > max)) {
 			if (val < min) min = val;
 			if (val > max) max = val;
-			main_UpdateDeviation(idx, min, max);
+			main_UpdateEEPROMDeviation(idx, min, max);
 		}
 	}
 }
 
-void main_ShowFrequencyDeviation(void)
+void main_ShowEEPROMDeviation(void)
 {
 	static uint16_t i = 0;
 	
@@ -800,7 +850,7 @@ void main_ShowFrequencyDeviation(void)
 	}
 }
 
-void main_ClearFrequencyDeviation(bool keep_base)
+void main_ClearEEPROMDeviation(bool keep_base)
 {
 	static uint16_t i = 0;
 	
@@ -818,4 +868,13 @@ void main_ClearFrequencyDeviation(bool keep_base)
 			terminal_PrintNL(&terminal, "Done", false);
 		}
 	}
+}
+
+float main_ErrorFrequencyToPPM(int f)
+{
+	float result = f;
+	if (f < 0) result = -f;
+	result++;
+	result /= (CONFIG_VCXO_NOMINAL_FREQUENCY / 1000000);
+	return result;
 }

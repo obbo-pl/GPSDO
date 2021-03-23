@@ -22,6 +22,7 @@ typedef struct GPSDO {
 	bool gps_fixed;
 	bool calibrated;
 	uint32_t frequency;
+	bool frequency_measured;
 	int error_frequency;
 	float error_ppm;
 	uint16_t dac_value;
@@ -37,6 +38,7 @@ typedef struct GPSDO {
 	volatile bool show_gpsdo_message;
 	volatile bool gpsdo_status_format_csv;
 	volatile bool disable_frequency_correction;
+	volatile bool disable_gps_correction;
 	uint8_t errors;
 	uint16_t *frequency_deviation;
 	bool show_frequency_deviation;
