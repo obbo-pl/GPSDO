@@ -9,6 +9,8 @@ GPS Disciplined Oscillator
 - frequency verification every 2 seconds,
 - stabilization of the frequency after about 80 seconds from the appearance of the 1pps signal,
 - accomplishment of stabilization signaled by the logic level at the "FIX" output,
+- automatic building of temperature characteristics,
+- stabilization based on the temperature characteristic with an error of less than 0.3ppm, 
 - supply voltage 5V,
 - current consumption about 130mA,
 - transparent transmission of messages from and to the U-BLOX module,
