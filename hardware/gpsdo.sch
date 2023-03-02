@@ -4,10 +4,10 @@ EELAYER END
 $Descr A3 16535 11693
 encoding utf-8
 Sheet 1 1
-Title ""
+Title "GPSDO 40MHz"
 Date ""
 Rev ""
-Comp ""
+Comp "obbo.pl"
 Comment1 ""
 Comment2 ""
 Comment3 ""
@@ -124,17 +124,6 @@ Wire Wire Line
 	1450 5850 2300 5850
 Wire Wire Line
 	1250 6050 1250 6150
-$Comp
-L obbo_Passive:TCVCXO-I733 X1
-U 1 1 5EA396D3
-P 8400 2600
-F 0 "X1" H 8900 2400 50  0000 L CNN
-F 1 "TCVCXO-I733-2P3-40MHz" H 8450 2300 50  0000 L CNN
-F 2 "obbo_footprints:Oscillator_SMD_ILSI-4Pin_5.0mmx3.2mm_HandSoldering" H 8400 2200 50  0001 C CNN
-F 3 "https://ilsiamerica.com/wp-content/uploads/2015/10/I533_I534_I733_I734_Series.pdf" H 8200 2700 50  0001 C CNN
-	1    8400 2600
-	1    0    0    -1  
-$EndComp
 Wire Wire Line
 	8050 1950 8050 1900
 Wire Wire Line
@@ -1052,17 +1041,6 @@ Wire Wire Line
 	13500 1500 14050 1500
 Wire Wire Line
 	14050 2450 13500 2450
-$Comp
-L obbo_IC:MCP4726 U4
-U 1 1 5EEBFBFD
-P 4000 2550
-F 0 "U4" H 4300 2450 60  0000 L CNN
-F 1 "MCP4726" H 4300 2350 60  0000 L CNN
-F 2 "Package_TO_SOT_SMD:SOT-23-6_Handsoldering" H 4200 2750 60  0001 L CNN
-F 3 "http://www.microchip.com/mymicrochip/filehandler.aspx?ddocname=en532676" H 4200 2850 60  0001 L CNN
-	1    4000 2550
-	1    0    0    -1  
-$EndComp
 Text GLabel 4650 2550 2    50   Input ~ 0
 Vadj
 Wire Wire Line
@@ -2413,17 +2391,6 @@ F 3 "http://www.ti.com/lit/sg/scyt129e/scyt129e.pdf" H 13250 1500 50  0001 C CNN
 	1    0    0    -1  
 $EndComp
 $Comp
-L gpsdo-rescue:ATxmega32A4U-AU-MCU_Microchip_ATmega-generator-gpsdo-rescue U11
-U 1 1 5EBD3330
-P 11650 7200
-F 0 "U11" H 11950 5800 50  0000 C CNN
-F 1 "ATxmega32A4U-AU" H 12250 5700 50  0000 C CNN
-F 2 "Package_QFP:TQFP-44_10x10mm_P0.8mm" H 11650 7200 50  0001 C CIN
-F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8387-8-and16-bit-AVR-Microcontroller-XMEGA-A4U_Datasheet.pdf" H 11650 7200 50  0001 C CNN
-	1    11650 7200
-	1    0    0    -1  
-$EndComp
-$Comp
 L Connector_Generic:Conn_01x02 J6
 U 1 1 5EB38317
 P 1450 8600
@@ -2617,5 +2584,87 @@ F 2 "obbo_footprints:L_0805K" H 10450 1150 50  0001 C CNN
 F 3 "~" H 10450 1150 50  0001 C CNN
 	1    10450 1150
 	0    -1   -1   0   
+$EndComp
+$Comp
+L obbo_Oscillator:TCVCXO-I733 X1
+U 1 1 6411E2D1
+P 8400 2600
+F 0 "X1" H 8450 2950 50  0000 L CNN
+F 1 "TCVCXO-I733-2P3-40MHz" H 8450 2850 50  0000 L CNN
+F 2 "obbo_footprints:Oscillator_SMD_ILSI-4Pin_5.0mm_3.2mm_HandSoldering" H 8400 1850 50  0001 C CNN
+F 3 "https://ilsiamerica.com/wp-content/uploads/2015/10/I533_I534_I733_I734_Series.pdf" H 8400 1750 50  0001 C CNN
+	1    8400 2600
+	1    0    0    -1  
+$EndComp
+$Comp
+L obbo_IC:MCP4726AxT-E-CH U4
+U 1 1 641498FA
+P 4000 2550
+F 0 "U4" H 4100 2200 50  0000 L CNN
+F 1 "MCP4726AxT-E-CH" H 4100 2100 50  0000 L CNN
+F 2 "Package_TO_SOT_SMD:SOT-23-6_Handsoldering" H 4000 1750 50  0001 C CNN
+F 3 "https://ww1.microchip.com/downloads/en/DeviceDoc/22272C.pdf" H 4000 1650 50  0001 C CNN
+	1    4000 2550
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:PWR_FLAG #FLG0101
+U 1 1 64151520
+P 5950 2850
+F 0 "#FLG0101" H 5950 2925 50  0001 C CNN
+F 1 "PWR_FLAG" H 5950 3023 50  0000 C CNN
+F 2 "" H 5950 2850 50  0001 C CNN
+F 3 "~" H 5950 2850 50  0001 C CNN
+	1    5950 2850
+	1    0    0    -1  
+$EndComp
+Wire Wire Line
+	5950 2850 5950 2950
+Connection ~ 5950 2950
+NoConn ~ 9150 6700
+NoConn ~ 10950 6400
+NoConn ~ 10950 6500
+NoConn ~ 10950 7200
+NoConn ~ 10950 7300
+NoConn ~ 10950 7600
+NoConn ~ 10950 7900
+NoConn ~ 10950 8000
+NoConn ~ 10950 8100
+NoConn ~ 10950 8200
+NoConn ~ 12350 6300
+NoConn ~ 12350 6400
+NoConn ~ 12350 6500
+NoConn ~ 12350 6600
+NoConn ~ 12350 7900
+NoConn ~ 3500 5750
+NoConn ~ 3500 5850
+NoConn ~ 3500 6050
+NoConn ~ 3500 6150
+$Comp
+L power:PWR_FLAG #FLG0102
+U 1 1 6438AAAA
+P 1100 8900
+F 0 "#FLG0102" H 1100 8975 50  0001 C CNN
+F 1 "PWR_FLAG" H 1100 9073 50  0000 C CNN
+F 2 "" H 1100 8900 50  0001 C CNN
+F 3 "~" H 1100 8900 50  0001 C CNN
+	1    1100 8900
+	1    0    0    -1  
+$EndComp
+Wire Wire Line
+	1100 8900 1100 8950
+Wire Wire Line
+	1100 8950 1450 8950
+Connection ~ 1450 8950
+$Comp
+L MCU_Microchip_ATmega:ATxmega32A4U-AU U11
+U 1 1 64412C6E
+P 11650 7200
+F 0 "U11" H 12100 5800 50  0000 C CNN
+F 1 "ATxmega32A4U-AU" H 12150 5700 50  0000 C CNN
+F 2 "Package_QFP:TQFP-44_10x10mm_P0.8mm" H 11650 7200 50  0001 C CIN
+F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8387-8-and16-bit-AVR-Microcontroller-XMEGA-A4U_Datasheet.pdf" H 11650 7200 50  0001 C CNN
+	1    11650 7200
+	1    0    0    -1  
 $EndComp
 $EndSCHEMATC
